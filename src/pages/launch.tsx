@@ -12,7 +12,6 @@ import { LAUNCH_TILE_DATA } from "./launches";
 export const GET_LAUNCH_DETAILS = gql`
   query LaunchDetails($launchId: ID!) {
     launch(id: $launchId) {
-      isInCart @client
       site
       rocket {
         type
@@ -20,6 +19,7 @@ export const GET_LAUNCH_DETAILS = gql`
       ...LaunchTile
     }
   }
+  ${LAUNCH_TILE_DATA}
 `;
 
 interface LaunchProps extends RouteComponentProps {
@@ -38,12 +38,8 @@ const Launch: React.FC<LaunchProps> = ({ launchId }) => {
 
   return (
     <>
-      <Header
-        image={
-          data.launch && data.launch.mission && data.launch.mission.missionPatch
-        }
-      >
-        {data && data.launch && data.launch.mission && data.launch.mission.name}
+      <Header image={data?.launch?.mission?.missionPatch}>
+        {data?.launch?.mission?.name}
       </Header>
       <LaunchDetail {...data.launch} />
       <ActionButton {...data.launch} />

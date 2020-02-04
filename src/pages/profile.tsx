@@ -24,7 +24,7 @@ interface ProfileProps extends RouteComponentProps {}
 const Profile: React.FC<ProfileProps> = () => {
   const { data, loading, error } = useQuery<GetMyTripsTypes.GetMyTrips, any>(
     GET_MY_TRIPS,
-
+    // we want to always reflect the newest data 
     { fetchPolicy: "network-only" }
   );
   if (loading) return <Loading />;

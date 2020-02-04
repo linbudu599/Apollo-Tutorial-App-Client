@@ -1,9 +1,9 @@
 import React from "react";
 import { useQuery } from "@apollo/react-hooks";
 import gql from "graphql-tag";
-import { RouteComponentProps } from "@reach/router";
 
 import { LaunchTile, Header, Button, Loading } from "../components";
+import { RouteComponentProps } from "@reach/router";
 import * as GetLaunchListTypes from "./__generated__/GetLaunchList";
 
 export const LAUNCH_TILE_DATA = gql`
@@ -29,7 +29,10 @@ const GET_LAUNCHES = gql`
       launches {
         ...LaunchTile
       }
+    }
   }
+  # import fragment
+  ${LAUNCH_TILE_DATA}
 `;
 
 interface LaunchesProps extends RouteComponentProps {}
@@ -41,17 +44,14 @@ const Launches: React.FC<LaunchesProps> = () => {
   >(GET_LAUNCHES);
 
   if (loading) return <Loading />;
-  if (error) return <p>ERROR</p>;
-  if (!data) return <p>Not found</p>;
+  if (error || !data) return <p>ERROR</p>;
 
   return (
     <>
       <Header />
-      {data.launches &&
-        data.launches.launches &&
-        data.launches.launches.map((launch: any) => (
-          <LaunchTile key={launch.id} launch={launch} />
-        ))}
+      {data?.launches?.launches.map((launch: any) => (
+        <LaunchTile key={launch.id} launch={launch} />
+      ))}
       {data.launches && data.launches.hasMore && (
         <Button
           onClick={() =>
@@ -61,6 +61,7 @@ const Launches: React.FC<LaunchesProps> = () => {
               },
               updateQuery: (prev, { fetchMoreResult, ...rest }) => {
                 if (!fetchMoreResult) return prev;
+                // TODO: Deal With It
                 return {
                   ...fetchMoreResult,
                   launches: {

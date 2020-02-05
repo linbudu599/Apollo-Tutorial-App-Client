@@ -14,7 +14,9 @@ Apollo-Client（以下简称 AC 好了）是一个数据流管理方案，就像
 
 需要安装额外的包，包括：
 
-- `apollo-client`，核心包。
+- `apollo-client`
+
+- `react-apollo`
 
 - `graphql-tag`，提供 `gql` 方法，包裹 graphql 查询语句，并将其解析为 AST
 
@@ -319,7 +321,206 @@ const client: ApolloClient<NormalizedCacheObject> = new ApolloClient({
 });
 ```
 
-### 管理本地逻辑
+### 管理本地数据
+
+通常在一个 App 中，我们不仅需要管理从后端获取的数据，还要关心本地的数据如网络加载状态，来进行相应的交互切换等等。使用 AC，我们能将本地数据也进行缓存，并可以和向 Graph Api 请求远程数据同时进行。
+
+管理本地数据和管理远程数据类似，通过构建客户端 schema 与客户端 resolver，再通过 `@client` 指令来进行查询。
+
+先看一个简单的：
+
+```typescript
+export const typeDefs = gql`
+  extend type Query {
+    isLoggedIn: Boolean!
+    cartItems: [ID!]!
+  }
+
+  extend type Launch {
+    isInCart: Boolean!
+  }
+
+  extend type Mutation {
+    addOrRemoveFromCart(id: ID!): [ID!]!
+  }
+`;
+
+type ResolverFn = (
+  parent: any,
+  args: any,
+  { cache }: { cache: ApolloCache<any> }
+) => any;
+
+interface ResolverMap {
+  [field: string]: ResolverFn;
+}
+
+interface AppResolvers extends Resolvers {
+  Launch: ResolverMap;
+  Mutation: ResolverMap;
+}
+
+export const resolvers: AppResolvers = {
+  Launch: {
+    isInCart: (launch: LaunchTileTypes.LaunchTile, _, { cache }): boolean => {
+      // ...
+    }
+  },
+  Mutation: {
+    addOrRemoveFromCart: (_, { id }: { id: string }, { cache }): string[] => {
+      // ...
+    }
+  }
+};
+```
+
+- 借助 `typescript`，我们很好的规范了 resolver 的函数形状等，可以看到这里我们只定义了管理本地数据的 resolver。
+
+- 注意这里的类型定义，我们实际上是继承了在服务端设计好的类型，通过 `extend` 关键字
+
+- 然后回到 `index.js` ，我们需要把客户端类型定义与解析器也放进客户端里。
+
+  ```typescript
+  const client: ApolloClient<NormalizedCacheObject> = new ApolloClient({
+    cache,
+    link: new HttpLink({
+      // 前面的服务端地址
+      uri: "http://localhost:4000",
+      headers: {
+        authorization: localStorage.getItem("token"),
+        "client-name": "Space Explorer [web]",
+        "client-version": "1.0.0"
+      }
+    }),
+    resolvers,
+    typeDefs
+  });
+  ```
+
+- 如何使用本地定义的 resolver？
+
+  ```typescript
+  const TOGGLE_CART = gql`
+    mutation addOrRemoveFromCart($launchId: ID!) {
+      addOrRemoveFromCart(id: $launchId) @client
+    }
+  `;
+  ```
+
+### 查询本地数据
+
+在首屏，实际上我们就是通过查询本地数据来得知用户是否登录，并选择性的渲染出新的界面。
+
+```typescript
+const IS_LOGGED_IN = gql`
+  query IsUserLoggedIn {
+    isLoggedIn @client
+  }
+`;
+
+function IsLoggedIn() {
+  const { data } = useQuery(IS_LOGGED_IN);
+  return data.isLoggedIn ? <Pages /> : <Login />;
+}
+
+injectStyles();
+
+ReactDOM.render(
+  <ApolloProvider client={client}>
+    <IsLoggedIn />
+  </ApolloProvider>,
+  document.getElementById("root")
+);
+```
+
+`@client` 会指定从客户端加载该数据。
+
+可以看到，查询客户端数据仍然是通过 `useQuery` ，变动体现在查询语句上。
+
+### 向服务端数据添加虚拟域
+
+我的大概理解是，为服务端返回的数据添加虚拟域。这些虚拟域只存在客户端，并且能够使用本地数据来“装饰”服务端数据，实际上在 **管理本地数据** 一节，我们看到的 `isInCart` 即为虚拟域。举个例子：
+
+```typescript
+export const GET_LAUNCH_DETAILS = gql`
+  query LaunchDetails($launchId: ID!) {
+    launch(id: $launchId) {
+      isInCart @client
+      site
+      rocket {
+        type
+      }
+      ...LaunchTile
+    }
+  }
+  ${LAUNCH_TILE_DATA}
+`;
+```
+
+在这一查询语句中，`isInCart` 实际上不存在于服务端类型定义中，但我们可以加入这个域并指定 `@client` ，使得返回的数据中带上这一字段（实际上它来自于客户端）。
+
+### 更新本地数据
+
+你可以通过两种方式更新本地缓存中的数据，包括 **直接调用 client.writeData()** 方法与使用 客户端 resolver
+
+前者通常用于写入一些简单的数据，复杂的逻辑应该交由后者处理。
+
+在前面我们已经看到过一个在 `useMutation` 的 `onCompleted handler`里直接写入数据的例子，即
+
+```typescript
+export default function Login() {
+  const client: ApolloClient<any> = useApolloClient();
+  const [login, { loading, error }] = useMutation<
+    LoginTypes.login,
+    LoginTypes.loginVariables
+  >(LOGIN_USER, {
+    onCompleted({ login }) {
+      localStorage.setItem("token", login as string);
+      client.writeData({ data: { isLoggedIn: true } });
+    }
+  });
+
+  if (loading) return <Loading />;
+  if (error) return <p>An error occurred</p>;
+
+  return <LoginForm login={login} />;
+}
+```
+
+我们还可以通过 `useMutation` 的另外一个 handler 来直接写入数据，`update`，我们能通过它在一个 mutation 发生后手动更新缓存，而不用重新获取数据。
+
+```typescript
+const BookTrips: React.FC<BookTripsProps> = ({ cartItems }) => {
+  const [bookTrips, { data }] = useMutation<
+    BookTripsTypes.BookTrips,
+    BookTripsTypes.BookTripsVariables
+  >(BOOK_TRIPS, {
+    variables: { launchIds: cartItems },
+    refetchQueries: cartItems.map(launchId => ({
+      query: GET_LAUNCH,
+      variables: { launchId }
+    })),
+
+    update(cache) {
+      cache.writeData({ data: { cartItems: [] } });
+    }
+  });
+
+  return data && data.bookTrips && !data.bookTrips.success ? (
+    <p data-testid="message">{data.bookTrips.message}</p>
+  ) : (
+    <Button onClick={() => bookTrips()} data-testid="book-button">
+      Book All
+    </Button>
+  );
+};
+```
+
+在这个例子里我们直接重置了 `cartItem` 的值，并且是在 `BookTrips` 这个请求发送之前。
+
+### 总结
+
+事实上我也觉得有点迷糊了，一路跟着写下来颇有些不求甚解的意味。但这是在使用原生的 `Apollo-Client`，希望专门的 `React-Apollo` 能给我惊喜吧
 
 ## React-Apollo
 
